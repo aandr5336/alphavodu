@@ -83,9 +83,68 @@ python tools/race.py --help
 
 ## Наш домен
 
-*Заповнити:* домен, обмежений ресурс, адреси каталогу й заявок, поля.
+**Прокат настільних ігор.** Обмежений ресурс — коробки гри (`available`).
+
+### Моделі
+
+| Модель | Поля |
+|---|---|
+| `BoardGame` (каталог) | `id`, `title`, `description`, `min_players`, `max_players`, `available` (коробок на полиці) |
+| `Rental` (заявка) | `id`, `owner`, `game`, `quantity`, `status`, `created_at` |
+
+### Адреси
+
+| Адреса | Доступ |
+|---|---|
+| `GET /api/v1/games/`, `GET /api/v1/games/<id>/` | усім, лише читання |
+| `/api/v1/rentals/`, `/api/v1/rentals/<id>/` | з токеном, лише власні заявки |
+| `POST /api/v1/rentals/<id>/confirm/` | власник |
+| `POST /api/v1/rentals/<id>/cancel/` | власник |
+
+### Стани заявки
+
+| Перехід | Що з `available` |
+|---|---|
+| створення → `draft` | не змінюється |
+| `draft` → `confirmed` | зменшується на `quantity` |
+| `draft` → `cancelled` | не змінюється |
+| `confirmed` → `cancelled` | збільшується на `quantity` |
+
+Будь-який інший перехід — `409`. `cancelled` — кінцевий стан.
+Якщо коробок не вистачає, `confirm` повертає `400`.
+
+**Інваріант:** коробки списані тоді й лише тоді, коли заявка в стані `confirmed`.
 
 ## Сценарій у curl
 
-*Заповнити:* вхід → каталог → заявка → `confirm` → залишок зменшився → повторний
-`confirm` `409` → `cancel` → залишок повернувся.
+Спершу `python manage.py seed_attack` і `python manage.py runserver`.
+Команди для bash (на Windows — Git Bash).
+
+```bash
+# 1. Вхід: скопіюйте значення "access" з відповіді
+curl -s -X POST http://127.0.0.1:8000/api/v1/auth/token/ \
+     -H "Content-Type: application/json" \
+     -d '{"username": "attacker1", "password": "attack-pass-1"}'
+TOKEN="вставте_access_сюди"
+
+# 2. Каталог: у гри 1 available = 50
+curl -s http://127.0.0.1:8000/api/v1/games/
+curl -s http://127.0.0.1:8000/api/v1/games/1/
+
+# 3. Заявка (draft): запам'ятайте "id" з відповіді
+curl -s -X POST http://127.0.0.1:8000/api/v1/rentals/ \
+     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -d '{"game": 1, "quantity": 2}'
+ID=1   # замініть на id вашої заявки
+
+# 4. confirm → 200, available = 48
+curl -i -X POST http://127.0.0.1:8000/api/v1/rentals/$ID/confirm/ -H "Authorization: Bearer $TOKEN"
+curl -s http://127.0.0.1:8000/api/v1/games/1/
+
+# 5. Повторний confirm → 409
+curl -i -X POST http://127.0.0.1:8000/api/v1/rentals/$ID/confirm/ -H "Authorization: Bearer $TOKEN"
+
+# 6. cancel → 200, available знову 50
+curl -i -X POST http://127.0.0.1:8000/api/v1/rentals/$ID/cancel/ -H "Authorization: Bearer $TOKEN"
+curl -s http://127.0.0.1:8000/api/v1/games/1/
+```
